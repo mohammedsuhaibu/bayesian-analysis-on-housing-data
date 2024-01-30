@@ -23,13 +23,7 @@ This project demonstrates my expertise in data transformation, and model evaluat
    git clone https://github.com/yourusername/predictive-housing-analysis.git
    ```
 
-2. Install required R packages:
-   ```
-   # Install necessary packages
-   install.packages(c("ggplot2", "rstanarm", "bayesplot", "tidyverse", "broom.mixed", "rstan", "mice", "caret", "corrplot", "leaflet", "Metrics"))
-   ```
-
-3. Run the analysis:
+2. Run the analysis:
    ```
    # Open RStudio and run the provided R scripts
    ```

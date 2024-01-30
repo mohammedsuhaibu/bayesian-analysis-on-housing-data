@@ -1,0 +1,208 @@
+---
+title: "bayesian_ananlysis_on_housingdata"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+date: "2023-12-19"
+dataset: "https://www.kaggle.com/datasets/camnugent/california-housing-prices/code"
+---
+
+# Libraries used
+
+```{r}
+library(ggplot2)
+library(rstanarm)
+library(bayesplot)
+library(bayesrules) 
+library(tidyverse)
+library(tidybayes) 
+library(broom.mixed)
+library(rstan)
+library(mice)
+library(caret)
+library(corrplot)
+library(leaflet)
+library(Metrics)
+library(tinytex)
+```
+
+# Import Data
+
+```{r}
+data <- read.csv("housing.csv", header = TRUE)
+head(data)
+```
+
+# Data prerpocessing
+
+```{r}
+# Data removed if empty and categorical were changed to numerical
+data <- na.omit(data)
+data$ocean_proximity <- as.numeric(factor(data$ocean_proximity, levels = c('INLAND', '<1H OCEAN', 'NEAR BAY', 'NEAR OCEAN','ISLAND')))
+
+# Check for Outliers
+numeric_columns <- c("housing_median_age", "total_rooms", "total_bedrooms", "population", "households", "median_income", "median_house_value", "ocean_proximity", "rooms_per_bedroom", "population_per_household")
+```
+
+# Visualizing Data
+
+```{r, error=TRUE, echo=TRUE}
+numeric_columns <- c("housing_median_age", "total_rooms", "total_bedrooms", 
+                     "population", "households", "median_income", "median_house_value", "ocean_proximity")
+par(mfrow = c(3, 3))  # Adjust the layout based on the number of columns
+for (col in numeric_columns) {
+  hist(data[[col]], main = col, xlab = "")
+}
+
+# Create map
+map_data <- data[, c("latitude", "longitude", "median_house_value")]
+my_map <- leaflet(data = map_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitude, ~latitude,
+    radius = ~sqrt(median_house_value) / 2000,  # Adjust the radius based on median_house_value
+    color = "red",
+    fillOpacity = 0.9,
+    popup = ~paste("Median House Value: $", median_house_value)
+  )
+my_map
+```
+
+# Transforming Data
+
+```{r}
+# Feature Engineering
+data$rooms_per_bedroom <- data$total_rooms / data$total_bedrooms
+data$population_per_household <- data$population / data$households
+
+# Transformations applied
+data$log_total_bedrooms <- log(data$total_bedrooms)
+data$log_total_rooms <- log(data$total_rooms)
+data$log_households <- log(data$households)
+```
+
+# Before and After transformations
+
+```{r}
+# Create histograms for each variable before and after transformation
+hist(data$total_bedrooms, main = "Total Bedrooms", xlab = "Original")
+hist(data$log_total_bedrooms, main = "Total Bedrooms", xlab = "Log-transformed")
+
+hist(data$total_rooms, main = "Total Rooms", xlab = "Original")
+hist(data$log_total_rooms, main = "Total Rooms", xlab = "Log-transformed")
+
+hist(data$households, main = "Households", xlab = "Original")
+hist(data$log_households, main = "Households", xlab = "Log-transformed")
+```
+
+# Picking Predictors
+
+```{r}
+# Correlation plot to pick predictor/response variables 
+corr <- cor(data[, numeric_columns])
+corrplot(corr, method = "color", type = "full", order = "hclust", tl.col = "black", tl.srt = 100)
+
+```
+
+# Splitting data into (60/40)
+
+```{r}
+set.seed(123)
+index <- createDataPartition(data$median_house_value, p = 0.6, list = FALSE)
+train_data <- data[index, ]
+test_data <- data[-index, ]
+
+# Remove outliers and scale numeric variables
+train_data <- train_data[train_data$median_house_value < 500001, ]
+test_data <- test_data[test_data$median_house_value < 500001, ]
+```
+
+# Posterior Regression Model
+
+```{r}
+posterior_regression_model <- rstanarm::stan_glm(median_house_value ~ median_income + ocean_proximity + median_income:ocean_proximity + rooms_per_bedroom, 
+                                                 data = train_data,
+                                                 family = gaussian, 
+                                                 prior_intercept = rstanarm::normal(200000,2000), 
+                                                 prior = rstanarm::normal(0, 10, autoscale = TRUE),
+                                                 prior_aux = rstanarm::exponential(),
+                                                 chains = 5 , iter = 5000*2, seed = 12)
+
+```
+
+# Model diagnostic (summary contains r-hat and neff)
+
+```{r}
+mcmc_trace(posterior_regression_model,size=0.1)
+mcmc_dens_overlay(posterior_regression_model)
+pp_check(posterior_regression_model)
+summary(posterior_regression_model)
+
+tidy(posterior_regression_model, effects = c("fixed","aux"),
+     conf.int = TRUE, conf.level = 0.9)
+
+posterior_predict(posterior_regression_model, newdata = test_data)
+```
+
+# Cross validation to check the predictive power
+
+```{r}
+set.seed(8435)
+cv_test <- 
+  prediction_summary_cv(model = posterior_regression_model, data = test_data, k = 10)
+cv_test$folds
+
+cv_main <- 
+  prediction_summary_cv(model = posterior_regression_model, data = train_data, k = 10)
+cv_main$folds
+model_main<- loo(posterior_regression_model)
+```
+
+
+```{r}
+cv_test$folds
+cv_main$folds
+model_main$estimates
+```
+
+
+
+
+# Fitting different models:
+```{r}
+## PCA 
+# Standardize the data
+data_standardized <- scale(train_data[, numeric_columns])
+# Perform PCA
+pca_model <- prcomp(data_standardized)
+
+## RandomForest
+library(randomForest)
+# Assuming 'outcome' is your outcome variable
+rf_model <- randomForest(median_house_value ~ median_income + ocean_proximity + rooms_per_bedroom, 
+                         data = train_data)
+```
+
+# Resuls of fitting different models:
+```{r}
+## PCA
+summary(pca_model)
+
+# PCA 1 explains the most variance
+print(pca_model$rotation)
+plot(pca_model, type = "l")
+
+# Print summary of the random forest model
+print(rf_model)
+predicted_value_rf <- predict(rf_model, test_data)
+actual_value_rf <- test_data$median_house_value
+# Calculate RMSE
+rmse <- rmse(actual_value_rf, predicted_value_rf)
+print(paste("RMSE: ", round(rmse, 2)))
+# Calculate MAE
+mae <- mae(actual_value_rf, predicted_value_rf)
+print(paste("MAE: ", round(mae, 2)))
+```
+
